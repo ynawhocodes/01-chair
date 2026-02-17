@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Chair</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'Helvetica Neue', sans-serif;
+    font-size: 20px;
+    background: #fff;
+    color: #000;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #000;
+    padding-bottom: 12px;
+    margin-bottom: 32px;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .conn { font-size: 20px; color: #999; }
+  .conn.ok { color: #000; }
+
+  .badge {
+    font-size: 20px;
+    font-weight: 600;
+    color: #999;
+    margin-bottom: 32px;
+  }
+  .badge.on { color: #000; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: #ccc;
+    border: 1px solid #ccc;
+    margin-bottom: 32px;
+  }
+  .cell {
+    background: #fff;
+    padding: 16px;
+  }
+  .label {
+    font-size: 20px;
+    color: #999;
+    margin-bottom: 4px;
+  }
+  .time {
+    font-size: 20px;
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+  }
+
+  .section {
+    border-top: 1px solid #000;
+    padding-top: 16px;
+    margin-bottom: 32px;
+  }
+  .section-title {
+    font-size: 20px;
+    color: #999;
+    margin-bottom: 12px;
+  }
+
+  .bar-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .bar-name { font-size: 20px; color: #999; width: 28px; }
+  .bar-track { flex: 1; height: 4px; background: #eee; }
+  .bar-val { height: 100%; background: #000; transition: width 0.3s; }
+  .bar-val.over { background: #c00; }
+  .bar-num { font-size: 20px; color: #999; width: 50px; text-align: right; }
+
+  .log-list { list-style: none; }
+  .log-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+    font-size: 20px;
+  }
+  .log-item:last-child { border-bottom: none; }
+  .log-time { color: #999; width: 120px; }
+  .log-dur { font-family: 'Courier New', monospace; font-weight: 600; flex: 1; }
+  .log-best { font-weight: 700; color: #c00; }
+  .log-empty { color: #ccc; font-size: 20px; padding: 10px 0; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Smart Chair</h1>
+  <span class="conn" id="conn">connecting</span>
+</div>
+
+<div class="badge" id="status">NOT SITTING</div>
+
+<div class="grid">
+  <div class="cell">
+    <div class="label">Now</div>
+    <div class="time" id="now">00:00:00</div>
+  </div>
+  <div class="cell">
+    <div class="label">Last</div>
+    <div class="time" id="last">00:00:00</div>
+  </div>
+  <div class="cell">
+    <div class="label">Total</div>
+    <div class="time" id="total">00:00:00</div>
+  </div>
+  <div class="cell">
+    <div class="label">Best</div>
+    <div class="time" id="best">00:00:00</div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Sensors</div>
+  <div class="bar-row">
+    <span class="bar-name">S1</span>
+    <div class="bar-track"><div class="bar-val" id="b1" style="width:0%"></div></div>
+    <span class="bar-num" id="v1">0</span>
+  </div>
+  <div class="bar-row">
+    <span class="bar-name">S2</span>
+    <div class="bar-track"><div class="bar-val" id="b2" style="width:0%"></div></div>
+    <span class="bar-num" id="v2">0</span>
+  </div>
+  <div class="bar-row">
+    <span class="bar-name">S3</span>
+    <div class="bar-track"><div class="bar-val" id="b3" style="width:0%"></div></div>
+    <span class="bar-num" id="v3">0</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Log</div>
+  <ul class="log-list" id="log">
+    <li class="log-empty">Loading...</li>
+  </ul>
+</div>
+
+<script>
+var SUPABASE_URL = 'https://gnliztbvmcgwhxgcqmyd.supabase.co';
+var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdubGl6dGJ2bWNnd2h4Z2NxbXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEzMTg0ODUsImV4cCI6MjA4Njg5NDQ4NX0.NzBJ1iFrOMMVCO1Xz77_Wv8GpL1CH__gbeSIgG8Q0UM';
+
+var sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+var TOPIC = 'smartchair/01works_chair';
+var wasSitting = false;
+
+loadLogs();
+
+var client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+
+client.on('connect', function() {
+  document.getElementById('conn').textContent = 'connected';
+  document.getElementById('conn').className = 'conn ok';
+  client.subscribe(TOPIC);
+});
+
+client.on('error', function() {
+  document.getElementById('conn').textContent = 'disconnected';
+  document.getElementById('conn').className = 'conn';
+});
+
+client.on('offline', function() {
+  document.getElementById('conn').textContent = 'offline';
+  document.getElementById('conn').className = 'conn';
+});
+
+client.on('message', function(topic, message) {
+  var d = JSON.parse(message.toString());
+
+  document.getElementById('now').textContent = fmt(d.now);
+  document.getElementById('last').textContent = fmt(d.last);
+  document.getElementById('total').textContent = fmt(d.total);
+  document.getElementById('best').textContent = fmt(d.best);
+
+  var st = document.getElementById('status');
+  if (d.sitting) {
+    st.textContent = 'SITTING';
+    st.className = 'badge on';
+  } else {
+    st.textContent = 'NOT SITTING';
+    st.className = 'badge';
+  }
+
+  document.getElementById('v1').textContent = d.s1;
+  document.getElementById('v2').textContent = d.s2;
+  document.getElementById('v3').textContent = d.s3;
+  updateBar('b1', d.s1);
+  updateBar('b2', d.s2);
+  updateBar('b3', d.s3);
+
+  if (wasSitting && !d.sitting && d.last > 0) {
+    saveLog(d.last, d.best === d.last);
+  }
+  wasSitting = d.sitting;
+});
+
+function fmt(ms) {
+  var s = Math.floor(ms / 1000);
+  var h = Math.floor(s / 3600);
+  var m = Math.floor((s % 3600) / 60);
+  s = s % 60;
+  return String(h).padStart(2,'0') + ':' +
+         String(m).padStart(2,'0') + ':' +
+         String(s).padStart(2,'0');
+}
+
+function updateBar(id, val) {
+  var pct = Math.min(val / 4095 * 100, 100);
+  var el = document.getElementById(id);
+  el.style.width = pct + '%';
+  el.className = val > 300 ? 'bar-val over' : 'bar-val';
+}
+
+function fmtDate(iso) {
+  var d = new Date(iso);
+  var mm = String(d.getMonth()+1).padStart(2,'0');
+  var dd = String(d.getDate()).padStart(2,'0');
+  var hh = String(d.getHours()).padStart(2,'0');
+  var mi = String(d.getMinutes()).padStart(2,'0');
+  return mm+'/'+dd+' '+hh+':'+mi;
+}
+
+async function saveLog(duration, isBest) {
+  await sb.from('chair_logs').insert({
+    duration_ms: duration,
+    is_best: isBest
+  });
+  loadLogs();
+}
+
+async function loadLogs() {
+  var { data } = await sb.from('chair_logs')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(30);
+
+  var ul = document.getElementById('log');
+  if (!data || data.length === 0) {
+    ul.innerHTML = '<li class="log-empty">No records yet</li>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < data.length; i++) {
+    var l = data[i];
+    html += '<li class="log-item">';
+    html += '<span class="log-time">' + fmtDate(l.created_at) + '</span>';
+    html += '<span class="log-dur">' + fmt(l.duration_ms) + '</span>';
+    html += l.is_best ? '<span class="log-best">NEW BEST</span>' : '';
+    html += '</li>';
+  }
+  ul.innerHTML = html;
+}
+</script>
+</body>
+</html>
